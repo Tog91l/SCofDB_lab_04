@@ -1,155 +1,104 @@
-"""Доменные сущности заказа."""
+"""Сервис для работы с заказами."""
 
 import uuid
-from datetime import datetime,  timezone
 from decimal import Decimal
-from enum import Enum
-from typing import List
-from dataclasses import field, dataclass
-from .exceptions import (
-    OrderAlreadyPaidError,
-    OrderCancelledError,
-    InvalidQuantityError,
-    InvalidPriceError,
-    InvalidAmountError,
-)
+from typing import List, Optional
+
+from app.domain.order import Order, OrderItem, OrderStatus
+from app.domain.exceptions import OrderNotFoundError, UserNotFoundError
 
 
-# TODO: Реализовать OrderStatus (str, Enum)
-# Значения: CREATED, PAID, CANCELLED, SHIPPED, COMPLETED
-class OrderStatus(str, Enum):
-    CREATED = "created"  
-    PAID = "paid"
-    CANCELLED = "cancelled"
-    SHIPPED = "shipped"
-    COMPLETED = "completed"
+class OrderService:
+    """Сервис для операций с заказами."""
 
+    def __init__(self, order_repo, user_repo):
+        self.order_repo = order_repo
+        self.user_repo = user_repo
 
+    # TODO: Реализовать create_order(user_id) -> Order
+    async def create_order(self, user_id: uuid.UUID) -> Order:
+        user = await self.user_repo.find_by_id(user_id)
+        if not user:
+            raise UserNotFoundError(user_id)
+        order = Order(user_id = user_id)
+        await self.order_repo.save(order)
+        return order
+        #raise NotImplementedError("TODO: Реализовать OrderService.create_order")
 
-# TODO: Реализовать OrderItem (dataclass)
-# Поля: product_name, price, quantity, id, order_id
-# Свойство: subtotal (price * quantity)
-# Валидация: quantity > 0, price >= 0
-@dataclass
-class OrderItem:
-    product_name: str 
-    price: Decimal 
-    quantity: int 
-    order_id: uuid.UUID = None
-    id: uuid.UUID = field(default_factory=uuid.uuid4)
-   
+    # TODO: Реализовать get_order(order_id) -> Order
+    async def get_order(self, order_id: uuid.UUID) -> Order:
+        order = await self.order_repo.find_by_id(order_id)
+        if not order:
+            raise OrderNotFoundError(order_id)
+        return order 
+        #raise NotImplementedError("TODO: Реализовать OrderService.get_order")
 
-    def __post_init__(self):
-        if self.quantity <= 0: 
-            raise InvalidQuantityError(self.quantity)
-        if self.price < 0:
-            raise InvalidPriceError(self.price)
-    @property
-    def subtotal(self):
-        return self.price * self.quantity
+    # TODO: Реализовать add_item(order_id, product_name, price, quantity) -> OrderItem
+    async def add_item(
+        self,
+        order_id: uuid.UUID,
+        product_name: str,
+        price: Decimal,
+        quantity: int,
+    ) -> OrderItem:
+        order = await self.get_order(order_id)
+        item = order.add_item(product_name, price, quantity)
+        await self.order_repo.save(order)
+        return item
 
+        #raise NotImplementedError("TODO: Реализовать OrderService.add_item")
 
+    # TODO: Реализовать pay_order(order_id) -> Order
+    # КРИТИЧНО: гарантировать что нельзя оплатить дважды!
+    async def pay_order(self, order_id: uuid.UUID) -> Order:
+        order = await self.get_order(order_id)
+        order.pay()
+        await self.order_repo.save(order)
+        return order
+        #raise NotImplementedError("TODO: Реализовать OrderService.pay_order")
 
-
-# TODO: Реализовать OrderStatusChange (dataclass)
-# Поля: order_id, status, changed_at, id
-@dataclass
-class OrderStatusChange:
-    order_id: uuid.UUID
-    status: OrderStatus
-    changed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    id: uuid.UUID = field(default_factory=uuid.uuid4)
-
-
-# TODO: Реализовать Order (dataclass)
-# Поля: user_id, id, status, total_amount, created_at, items, status_history
-# Методы:
-#   - add_item(product_name, price, quantity) -> OrderItem
-#   - pay() -> None  [КРИТИЧНО: нельзя оплатить дважды!]
-#   - cancel() -> None
-#   - ship() -> None
-#   - complete() -> None
-@dataclass
-class Order:
-    user_id: uuid.UUID
-    id: uuid.UUID = field(default_factory=uuid.uuid4)
-    status: OrderStatus=OrderStatus.CREATED
-    total_amount: Decimal = field(default=Decimal(0))
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    items: List[OrderItem] = field(default_factory=list)
-    status_history: List[OrderStatusChange] = field(default_factory=list)
-
-
-
-    def __post_init__(self):
-        # Добавляем начальный статус в историю, если его нет
-        if not self.status_history:
-            self.status_history.append(
-                OrderStatusChange(
-                    order_id=self.id,
-                    status=self.status,
-                    changed_at=self.created_at
-                )
-            )
-        self._recalculate_total()
-
-    @property
-    def total_amount(self) -> Decimal:
-        return self._total_amount
-
-    @total_amount.setter
-    def total_amount(self, value: Decimal):
-        self._total_amount = value
-
-    def _recalculate_total(self):
-        """Пересчитать общую сумму заказа."""
-        self._total_amount = sum((item.subtotal for item in self.items), Decimal(0))
-
-    def add_item(self, product_name:str, price: Decimal, quantity: int) -> OrderItem: 
-
-        if self.status == OrderStatus.CANCELLED:
-            raise OrderCancelledError(self.id)
+    # TODO: Реализовать cancel_order(order_id) -> Order
+    async def cancel_order(self, order_id: uuid.UUID) -> Order:
+        order = await self.get_order(order_id)
         
-        item = OrderItem(
-            product_name=product_name,
-            price=price,
-            quantity=quantity,
-            order_id=self.id,
-            )
-        self.items.append(item)
-        self._recalculate_total()
-        #self.total_amount += item.subtotal
-        return item 
-    
-    def pay(self) -> None:
-        if self.status == OrderStatus.PAID:
-            raise OrderAlreadyPaidError(self.id)
-        if self.status == OrderStatus.CANCELLED:
-            raise OrderCancelledError(self.id)
+        order.cancel()
+        await self.order_repo.save(order)
         
-        self.status = OrderStatus.PAID
+        return order
+        #raise NotImplementedError("TODO: Реализовать OrderService.cancel_order")
 
-    
-    def cancel(self) -> None:
-        #нельзя отменить оплаченный
-        if self.status == OrderStatus.PAID:
-            raise OrderAlreadyPaidError(self.id)
-        if self.status == OrderStatus.CANCELLED:
-            raise OrderCancelledError(self.id)
-        self.status = OrderStatus.CANCELLED
-    
-    def ship(self) -> None:
-        if self.status == OrderStatus.CANCELLED:
-            raise OrderCancelledError(self.id)
-        if self.status != OrderStatus.PAID:
-            raise ValueError("Order must be paid before shipping")
-        if self.total_amount == 0:  
-            raise InvalidAmountError(self.id)
-        self.status = OrderStatus.SHIPPED
+    # TODO: Реализовать ship_order(order_id) -> Order
+    async def ship_order(self, order_id: uuid.UUID) -> Order:
+        order = await self.get_order(order_id)
+        order.ship()
+        await self.order_repo.save(order)
+        return order
+        #raise NotImplementedError("TODO: Реализовать OrderService.ship_order")
+
+    # TODO: Реализовать complete_order(order_id) -> Order
+    async def complete_order(self, order_id: uuid.UUID) -> Order:
+        order = await self.get_order(order_id)
         
-    def complete(self) -> None:
-        if self.status != OrderStatus.SHIPPED:
-            raise ValueError("Order must be shipped before completion")
-        if self.status == OrderStatus.CANCELLED:
-            raise OrderCancelledError(self.id)
-        self.status = OrderStatus.COMPLETED
+        order.complete()
+        await self.order_repo.save(order)
+        
+        return order
+        #raise NotImplementedError("TODO: Реализовать OrderService.complete_order")
+
+    # TODO: Реализовать list_orders(user_id: Optional) -> List[Order]
+    async def list_orders(self, user_id: Optional[uuid.UUID] = None) -> List[Order]:
+        if user_id:
+            return await self.order_repo.find_by_user(user_id)
+        return await self.order_repo.find_all()
+        #raise NotImplementedError("TODO: Реализовать OrderService.list_orders")
+
+    # TODO: Реализовать get_order_history(order_id) -> List[OrderStatusChange]
+    async def get_order_history(self, order_id: uuid.UUID) -> List:
+        order = await self.get_order(order_id)
+        return order.status_history
+
+        #raise NotImplementedError("TODO: Реализовать OrderService.get_order_history")
+
+    # TODO: Реализовать get_order_history(order_id) -> List[OrderStatusChange]
+    async def get_order_history(self, order_id: uuid.UUID) -> List:
+        raise NotImplementedError("TODO: Реализовать OrderService.get_order_history")
