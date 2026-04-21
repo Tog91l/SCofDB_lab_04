@@ -106,7 +106,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
 
                 else:
                 
-                    expires_at = datetime.now(UTC) + timedelta(seconds=self.ttl_seconds)
+                    expires_at = datetime.now() + timedelta(seconds=self.ttl_seconds)
 
                     await session.execute(
                     text(""" INSERT INTO idempotency_keys (idempotency_key, request_method, request_path, request_hash, status, expires_at)
